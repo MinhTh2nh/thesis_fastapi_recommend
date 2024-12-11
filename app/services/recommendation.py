@@ -6,10 +6,11 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from huggingface_hub import login
 from accelerate import init_empty_weights, infer_auto_device_map
+from app.services.search_service import search_similar_products
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 from fastapi import APIRouter
-from langchain.llms import HuggingFacePipeline
+from langchain_huggingface import HuggingFacePipeline
 
 # FastAPI Router
 router = APIRouter()
@@ -52,6 +53,9 @@ model_pipeline = pipeline(
     "text-generation",
     model=model_llm,
     tokenizer=tokenizer_llm,
+    max_new_tokens=100, 
+    top_k=50, 
+    temperature=0.1,
     device=0 if torch.cuda.is_available() else -1
 )
 
@@ -75,10 +79,10 @@ def extract_user_preferences(user_data):
     Extracts user preferences including categories and price range.
     """
     search_history = user_data.get("search_history", [])
-    orders = user_data.get("orders", [])
+    orders = user_data.get("order_products", [])
     
     categories = [term for term in search_history if term]
-    prices = [item["price"] for order in orders for item in order["items"]] if orders else []
+    prices = [item["price"] for item in orders] if orders else []
     price_range = (min(prices), max(prices)) if prices else None
     
     return {"categories": categories, "price_range": price_range}
@@ -88,6 +92,13 @@ def calculate_similarity_llama(user_preferences, product):
     """
     Generates a similarity score for a product based on user preferences.
     """
+    print(f"User Preferences: {user_preferences}")
+    print(f"Product: {product}")
+    
+    if not user_preferences['categories'] or not user_preferences['price_range']:
+        print("No valid categories or price range found.")
+        return 0.0
+
     prompt = f"""
     User is interested in categories {user_preferences['categories']} and price range {user_preferences['price_range']}.
     Compare this preference with the product: {product['name']} - {product['description']}.
@@ -104,12 +115,13 @@ def calculate_similarity_llama(user_preferences, product):
         score = float(response.strip().split()[-1])  # Extracts score
     except ValueError:
         score = 0.0
+    print(f"Generated Score: {score}")
     return score
 
 # Refine product recommendations using Llama
 def recommend_products_llm(user_data, products):
     """
-    Recommends products by calculating similarity scores and sorting.
+    Recommends products by calculating similarity scores and sorting them.
     """
     user_preferences = extract_user_preferences(user_data)
     recommendations = []
@@ -118,6 +130,8 @@ def recommend_products_llm(user_data, products):
         product_with_score = product.copy()
         product_with_score["score"] = similarity_score
         recommendations.append(product_with_score)
+    
+    # Sort the recommendations based on the similarity score
     return sorted(recommendations, key=lambda x: x["score"], reverse=True)
 
 # Load RAG pipeline
@@ -147,31 +161,26 @@ def load_rag_pipeline(llm, retriever, prompt):
 
 # Usage in RAG handler
 class RAGPipelineHandler:
-    def __init__(self, embeddings, retriever_name="default"):
+    def __init__(self, embeddings=None, retriever=None):
         self.embeddings = embeddings
-        self.retriever = self.load_retriever(retriever_name)
-        self.current_source = retriever_name
-        self.rag_pipeline = None
-        self.llm = llm  # Use the wrapped HuggingFacePipeline
+        self.retriever = retriever if retriever else search_similar_products  # Default to search_similar_products
+        self.llm = llm
         self.prompt = load_prompt_template()
-
-    def load_retriever(self, retriever_name, embeddings=None):
-        # Placeholder for retriever loading logic
-        pass
 
     def rag(self, user_data, similar_products):
         """
         Refines recommendations using the RAG pipeline.
         """
-        if not self.rag_pipeline or self.current_source != "default":
-            self.rag_pipeline = load_rag_pipeline(self.llm, self.retriever, self.prompt)
-            self.current_source = "default"
-
-        context = "\n".join([f"{p['name']}: {p['description']}" for p in similar_products])
-        user_preferences = extract_user_preferences(user_data)
-        question = (
-            f"Based on the user's interests in categories {user_preferences['categories']} "
-            f"and price range {user_preferences['price_range']}, recommend the top 5 products."
-        )
-        refined_recommendations = recommend_products_llm(user_data, similar_products)
-        return sorted(refined_recommendations, key=lambda x: x["score"], reverse=True)[:5]
+        try:
+            context = "\n".join([f"{p['name']}: {p['description']}" for p in similar_products])
+            user_preferences = extract_user_preferences(user_data)
+            question = (
+                f"Based on the user's interests in categories {user_preferences['categories']} "
+                f"and price range {user_preferences['price_range']}, recommend the top 5 products."
+            )
+            
+            # Generate refined recommendations using the LLM
+            refined_recommendations = recommend_products_llm(user_data, similar_products)
+            return sorted(refined_recommendations, key=lambda x: x["score"], reverse=True)[:5]
+        except Exception as e:
+            raise Exception(f"Error in refining recommendations: {str(e)}")

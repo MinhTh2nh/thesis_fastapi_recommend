@@ -6,6 +6,7 @@ import os
 from typing import List, Dict
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from bson import ObjectId
 
 load_dotenv()
 access_token = os.getenv("MY_ACCESS_TOKEN_HUGGINGFACE")
@@ -108,6 +109,29 @@ def search_similar_products(user_embedding, top_n=100):
     ])
     return results
 
+
+def search_similar_products_none_tolist(user_embedding, top_n=100):
+    # Convert the user embedding to a list for MongoDB compatibility
+    query_embedding = user_embedding
+    # Perform the vector search in MongoDB using the aggregation pipeline
+    cursor = db.products.aggregate([
+        {
+            "$vectorSearch": {
+                "index": "vector_index",  # The name of your vector index
+                "path": "description_embedding",  # The field storing the product embeddings
+                "queryVector": query_embedding,  # The user query vector
+                "numCandidates": 100,  # Number of candidates to search from
+                "limit": top_n  # Limit the results to top N
+            }
+        }
+    ])
+    # Convert the cursor to a list
+    results = list(cursor)
+    for result in results:
+        if "_id" in result and isinstance(result["_id"], ObjectId):
+            result["_id"] = str(result["_id"])
+
+    return results
 
 def rerank(query, sorted_candidates):
     """

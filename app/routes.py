@@ -1,10 +1,10 @@
 from app.models.embedding import ChunkingRequest, EmbeddingRequest
 from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
 from fastapi import APIRouter, HTTPException
-from app.services.user_service import get_user_data
-from app.services.search_service import cosine_similarity, extract_initial_candidates, sort_candidates_by_similarity, rerank, search_similar_products
-from app.services.embedding_service import generate_user_embedding
-from app.services.recommendation import RAGPipelineHandler
+from app.services.user_service import get_user_data, preprocess_user_data
+from app.services.search_service import cosine_similarity, extract_initial_candidates, sort_candidates_by_similarity, rerank, search_similar_products, search_similar_products_none_tolist
+from app.services.embedding_service import get_user_embeddings_context
+from app.services.recommendation import RAGPipelineHandler, extract_user_preferences
 from app.models.product import RecommendRequest
 from app.models.user import QueryRequest
 from sentence_transformers import SentenceTransformer
@@ -13,6 +13,8 @@ from typing import List
 import os
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+import numpy as np
+
 load_dotenv()
 
 router = APIRouter()
@@ -20,23 +22,30 @@ router = APIRouter()
 model = SentenceTransformer(os.getenv("MY_EMBEDDING_MODEL"))
 client = MongoClient(os.getenv("MY_URI_MONGODB"))
 db = client['mydatabase']
+products_collection = db["products"]
 
 @router.post("/recommend")
 async def recommend_products(request: RecommendRequest):
     try:
         # Fetch user data
-        user_data = get_user_data(request.user_id)
-        if not user_data:
+        user, orders, cart_items, search_history = get_user_data(request.user_id)
+
+        if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        # Generate user embedding11
-        user_embedding = generate_user_embedding(user_data)
-        similar_products = search_similar_products(user_embedding)
-        rag_handler = RAGPipelineHandler(embeddings=None)
-        recommended_products = rag_handler.rag(user_data, similar_products)
+        processed_user_data = preprocess_user_data(user, orders, cart_items, search_history)
+        ## Generate user embedding11
+        session_context = get_user_embeddings_context(processed_user_data)
+        query_vector = model.encode(session_context)
+
+        # Ensure the vector is serializable
+        query_vector_serializable = query_vector.tolist() 
+        similar_products = search_similar_products_none_tolist(query_vector_serializable)
+        rag_handler = RAGPipelineHandler(retriever=search_similar_products)  # Pass the retriever explicitly
+        recommended_products = rag_handler.rag(processed_user_data, similar_products)
         return {
             "user_id": request.user_id,
             "recommended_products": recommended_products,
-            "similiar_products": similar_products
+            "similiar_products": similar_products,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

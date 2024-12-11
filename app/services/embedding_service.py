@@ -1,34 +1,35 @@
-from sentence_transformers import SentenceTransformer
-import numpy as np
-import os
-from dotenv import load_dotenv
-
 # loading variables from .env file
-load_dotenv()
+def get_user_embeddings_context(processed_user_data):
+    all_products_descriptions = []  # List to store descriptive text
 
-model = SentenceTransformer(os.getenv("MY_EMBEDDING_MODEL"))
+    # Extract product descriptions from orders
+    order_products = processed_user_data.get("order_products", [])
+    for order in order_products:
+        product_id = order.get("productId")
+        quantity = order.get("quantity", 1)
+        size = order.get("size", "N/A")
+        price = order.get("price", "unknown")
+        if product_id:
+            all_products_descriptions.append(
+                f"User purchased product {product_id} (size {size}, quantity {quantity}, price {price})."
+            )
 
-def generate_user_embedding(user_data):
-    user, orders, cart_items, search_history = user_data
+    # Extract product descriptions from cart items
+    cart_products = processed_user_data.get("cart_products", [])
+    for cart_item in cart_products:
+        product_id = cart_item.get("productId")
+        if product_id:
+            all_products_descriptions.append(f"User currently has product {product_id} in their cart.")
 
-    # Create lists of interactions (product IDs or search terms)
-    order_products = [item['productId'] for order in orders for item in order['items']]
-    cart_product_ids = [item['productId'] for item in cart_items for item in item['items']]
-    search_keywords = search_history  # Using the search history directly
+    # Extract search history as descriptive text
+    search_history = processed_user_data.get("search_history", [])
+    for search_item in search_history:
+        all_products_descriptions.append(f"User searched for {search_item}.")
 
-    # Combine all interactions into one list of strings
-    all_interactions = order_products + cart_product_ids + search_keywords
+    # Combine all descriptive texts into a single context
+    if not all_products_descriptions:
+        return None  # Handle case where no data is available
 
-    # Convert the interactions into text (if they aren't already text)
-    interaction_texts = [str(interaction) for interaction in all_interactions]
-
-    # Generate embeddings for each interaction
-    interaction_embeddings = model.encode(interaction_texts)
-
-    # Aggregate the embeddings by averaging
-    if len(interaction_embeddings) == 0:
-        return np.zeros(model.get_sentence_embedding_dimension())  # Return zero vector if no embeddings
-
-    user_embedding = np.mean(interaction_embeddings, axis=0)
-
-    return user_embedding
+    session_context = " ".join(all_products_descriptions)  # Combine descriptions into a single string
+    # Generate embeddings for the combined context
+    return session_context
