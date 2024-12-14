@@ -61,18 +61,6 @@ model_pipeline = pipeline(
 
 llm = HuggingFacePipeline(pipeline=model_pipeline)
 
-# Prompt Template for RAG Pipeline
-def load_prompt_template():
-    query_template = (
-        "You are an AI assistant on an e-commerce website. "
-        "Your job is to recommend the top 5 products tailored "
-        "to the user's purchase history and shopping cart.\n\n"
-        "### Context:{context} \n\n"
-        "### Human: {question}\n\n"
-        "### Assistant:"
-    )
-    return PromptTemplate(template=query_template, input_variables=["context", "question"])
-
 # Extract user preferences
 def extract_user_preferences(user_data):
     """
@@ -92,44 +80,70 @@ def calculate_similarity_llama(user_preferences, product):
     """
     Generates a similarity score for a product based on user preferences.
     """
-    print(f"User Preferences: {user_preferences}")
-    print(f"Product: {product}")
-    
-    if not user_preferences['categories'] or not user_preferences['price_range']:
-        print("No valid categories or price range found.")
-        return 0.0
-
-    prompt = f"""
-    User is interested in categories {user_preferences['categories']} and price range {user_preferences['price_range']}.
-    Compare this preference with the product: {product['name']} - {product['description']}.
-    Provide a similarity score between 0 and 1.
-    """
-    inputs = tokenizer_llm(prompt, return_tensors="pt").to(device)
-    outputs = model_llm.generate(
-        **inputs,
-        max_new_tokens=50,
-        pad_token_id=tokenizer_llm.eos_token_id
-    )
-    response = tokenizer_llm.decode(outputs[0], skip_special_tokens=True)
     try:
-        score = float(response.strip().split()[-1])  # Extracts score
-    except ValueError:
-        score = 0.0
-    print(f"Generated Score: {score}")
-    return score
+        if not user_preferences['categories'] or not user_preferences['price_range']:
+            raise ValueError(f"User preferences are missing categories or price range: {user_preferences}")
+        product_descriptions = product.get('description', [])
+        formatted_description = ' '.join(
+            f"{key}: {value}" for desc in product_descriptions for key, value in desc.items()
+        )
+        if not formatted_description:
+            raise ValueError(f"Product description is empty or invalid for {product.get('name', 'Unknown product')}")
+        categories_string = ', '.join(user_preferences['categories'])
+        price_range_string = f"${user_preferences['price_range'][0]} - ${user_preferences['price_range'][1]}"
+        prompt = f"""
+        User is interested in categories: {categories_string} and price range: {price_range_string}.
+        Compare this preference with the product: {product['name']} - {formatted_description}.
+        Provide a similarity score between 0 and 1.
+        """
+        inputs = tokenizer_llm(prompt, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        # Ensure tensors are moved to the same device as the model
+        inputs = {key: value.to(model_llm.device) for key, value in inputs.items()}
+        # Generate model outputs
+        outputs = model_llm.generate(
+            inputs["input_ids"],
+            max_new_tokens=50,
+            pad_token_id=tokenizer_llm.eos_token_id
+        )
+        # Decode the model's response
+        response = tokenizer_llm.decode(outputs[0], skip_special_tokens=True)
+        # Extract similarity score
+        try:
+            score = float(response.strip().split()[-1])  # Extracts score
+        except ValueError:
+            raise ValueError(f"Failed to parse similarity score from the response: {response}")
+        
+        print(f"Generated Score for {product.get('name', 'Unknown product')}: {score}")
+        return score
+    
+    except Exception as e:
+        print(f"Error calculating similarity for product {product.get('name', 'Unknown')}: {str(e)}")
+        return 0.0  # Return a default score in case of error
 
 # Refine product recommendations using Llama
-def recommend_products_llm(user_data, products):
+def recommend_products_llm(products, user_preferences):
     """
     Recommends products by calculating similarity scores and sorting them.
     """
-    user_preferences = extract_user_preferences(user_data)
     recommendations = []
     for product in products:
-        similarity_score = calculate_similarity_llama(user_preferences, product)
-        product_with_score = product.copy()
-        product_with_score["score"] = similarity_score
-        recommendations.append(product_with_score)
+        try:
+            # Check for required fields
+            if 'name' not in product or 'description' not in product:
+                raise ValueError(f"Missing required fields in product: {product}")
+            
+            # Calculate similarity score
+            similarity_score = calculate_similarity_llama(user_preferences, product)
+            
+            # Add similarity score to the product
+            product_with_score = product.copy()
+            product_with_score["score"] = similarity_score
+            recommendations.append(product_with_score)
+        
+        except Exception as e:
+            print(f"Error processing product {product.get('name', 'Unnamed')}: {str(e)}")
+            continue  # Skip the current product if error occurs
+    
     
     # Sort the recommendations based on the similarity score
     return sorted(recommendations, key=lambda x: x["score"], reverse=True)
@@ -172,15 +186,17 @@ class RAGPipelineHandler:
         Refines recommendations using the RAG pipeline.
         """
         try:
-            context = "\n".join([f"{p['name']}: {p['description']}" for p in similar_products])
+            context = "\n".join([f"{p.get('name', 'Unknown')}: {p.get('description', 'No description available')}" for p in similar_products])
             user_preferences = extract_user_preferences(user_data)
             question = (
                 f"Based on the user's interests in categories {user_preferences['categories']} "
                 f"and price range {user_preferences['price_range']}, recommend the top 5 products."
             )
             
-            # Generate refined recommendations using the LLM
-            refined_recommendations = recommend_products_llm(user_data, similar_products)
-            return sorted(refined_recommendations, key=lambda x: x["score"], reverse=True)[:5]
+            # # Generate refined recommendations using the LLM
+            refined_recommendations = recommend_products_llm(similar_products, user_preferences)
+            return sorted(refined_recommendations, key=lambda x: x["score"], reverse=True)[:4]
+            # return user_preferences
         except Exception as e:
-            raise Exception(f"Error in refining recommendations: {str(e)}")
+             print(f"Error in RAG pipeline: {str(e)}")
+             raise Exception(f"Error in refining recommendations in RAG pipeline: {str(e)}")

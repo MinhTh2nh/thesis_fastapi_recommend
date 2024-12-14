@@ -33,7 +33,7 @@ async def recommend_products(request: RecommendRequest):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         processed_user_data = preprocess_user_data(user, orders, cart_items, search_history)
-        ## Generate user embedding11
+        # Generate user embedding11
         session_context = get_user_embeddings_context(processed_user_data)
         query_vector = model.encode(session_context)
 
@@ -44,8 +44,8 @@ async def recommend_products(request: RecommendRequest):
         recommended_products = rag_handler.rag(processed_user_data, similar_products)
         return {
             "user_id": request.user_id,
+            "similar_products": similar_products,
             "recommended_products": recommended_products,
-            "similiar_products": similar_products,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

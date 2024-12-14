@@ -110,7 +110,7 @@ def search_similar_products(user_embedding, top_n=100):
     return results
 
 
-def search_similar_products_none_tolist(user_embedding, top_n=100):
+def search_similar_products_none_tolist(user_embedding, top_n=5):
     # Convert the user embedding to a list for MongoDB compatibility
     query_embedding = user_embedding
     # Perform the vector search in MongoDB using the aggregation pipeline
@@ -120,7 +120,7 @@ def search_similar_products_none_tolist(user_embedding, top_n=100):
                 "index": "vector_index",  # The name of your vector index
                 "path": "description_embedding",  # The field storing the product embeddings
                 "queryVector": query_embedding,  # The user query vector
-                "numCandidates": 100,  # Number of candidates to search from
+                "numCandidates": 5,  # Number of candidates to search from
                 "limit": top_n  # Limit the results to top N
             }
         }
