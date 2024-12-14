@@ -34,7 +34,6 @@ def preprocess_user_data(user, orders, cart_items, search_history):
     user_name = user.get("name", "Unknown")
     user_email = user.get("email", "Not Provided")
     avatar_url = user.get("avatar", "")
-
     # Process order items (ProductID, Quantity)
     order_products = []
     for order in orders:
@@ -51,11 +50,12 @@ def preprocess_user_data(user, orders, cart_items, search_history):
     cart_products = []
     for cart_item in cart_items:
         for item in cart_item['items']:
+            price = item.get('price', 0)
             product = {
                 'productId': str(item['productId']),  # Convert ObjectId to string
                 'quantity': item['quantity'],
                 'size': item['size'],
-                'price': item['price']
+                'price': price
             }
             cart_products.append(product)
 
