@@ -8,6 +8,7 @@ load_dotenv()
 
 client = MongoClient(os.getenv("MY_URI_MONGODB"))
 db = client["mydatabase"]
+products_collection = db["products"]
 users_collection = db["users"]
 orders_collection = db["orders"]
 cart_collection = db["carts"]
@@ -27,35 +28,48 @@ def get_user_data(user_id):
     # Extract search history from the user document
     search_history = user.get("search_history", []) or []
 
-    return user, orders, cart_items, search_history
+    return orders, cart_items, search_history
 
-def preprocess_user_data(user, orders, cart_items, search_history):
-    # Extract user details
-    user_name = user.get("name", "Unknown")
-    user_email = user.get("email", "Not Provided")
-    avatar_url = user.get("avatar", "")
+def preprocess_user_data(orders, cart_items, search_history):
+    """
+    Preprocess user data by retrieving product names from the products collection.
 
-    # Process order items (ProductID, Quantity)
+    Args:
+        orders (list): List of order documents.
+        cart_items (list): List of cart documents.
+        search_history (list): List of search history strings.
+        products_collection: MongoDB collection object for products.
+
+    Returns:
+        dict: Processed user data containing order products, cart products, and search history.
+    """
+    # Helper function to retrieve product details by productId
+    def get_product_name(product_id):
+        product = products_collection.find_one({"_id": product_id})
+        return product.get("name", "Unknown Product") if product else "Unknown Product"
+
+    # Process order items (Product Name, Quantity)
     order_products = []
     for order in orders:
         for item in order['items']:
+            product_name = get_product_name(item['productId'])  # Fetch product name
             product = {
-                'productId': str(item['productId']),  # Convert ObjectId to string
+                'product_name': product_name,
                 'quantity': item['quantity'],
                 'size': item['size'],
                 'price': item['price']
             }
             order_products.append(product)
 
-    # Process cart items (ProductID)
+    # Process cart items (Product Name)
     cart_products = []
     for cart_item in cart_items:
         for item in cart_item['items']:
+            product_name = get_product_name(item['productId'])  # Fetch product name
             product = {
-                'productId': str(item['productId']),  # Convert ObjectId to string
+                'product_name': product_name,
                 'quantity': item['quantity'],
-                'size': item['size'],
-                'price': item['price']
+                'size': item['size']
             }
             cart_products.append(product)
 
@@ -64,9 +78,6 @@ def preprocess_user_data(user, orders, cart_items, search_history):
 
     # Combine all data for recommendation purposes
     processed_data = {
-        'user_name': user_name,
-        'user_email': user_email,
-        'avatar': avatar_url,
         'order_products': order_products,
         'cart_products': cart_products,
         'search_history': search_history_data
