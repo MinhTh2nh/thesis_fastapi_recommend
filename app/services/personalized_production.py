@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from huggingface_hub import login
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModel
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -129,27 +129,23 @@ def get_user_embeddings(orders, cart_items, search_history):
 
 import torch
 
-def search_similar_products(user_embedding, k=20):
+def search_similar_products_Rec(user_embedding, k=21):
     """
     Search for the top-k most similar products to the user's embedding.
-
     Args:
         user_embedding (torch.Tensor): The embedding representing the user's preferences (shape: [n, 384]).
         k (int): The number of similar products to retrieve.
-
     Returns:
         list: A list of dictionaries containing product IDs and product names of the most similar products.
     """
     try:
-        # Aggregate user embeddings into a single vector
+        # Aggregate user embeddings to a single vector
         if len(user_embedding.shape) > 1:
-            # Use mean pooling (or another aggregation method)
-            user_embedding = torch.mean(user_embedding, dim=0)
+            user_embedding = torch.mean(user_embedding, dim=0)  # Reduce to 1D
+        # Convert tensor to list of floats
+        query_embedding = user_embedding.cpu().numpy().tolist()
         
-        # Convert the reduced user embedding to a list for MongoDB compatibility
-        query_embedding = user_embedding.tolist()  # Ensure it's 1D
-
-        # Perform the vector search in MongoDB using the aggregation pipeline
+        # Perform the vector search in MongoDB
         results = db.products.aggregate([
             {
                 "$vectorSearch": {
@@ -161,13 +157,16 @@ def search_similar_products(user_embedding, k=20):
                 }
             }
         ])
+        
         # Convert the CommandCursor to a list
         results_list = list(results)
         return results_list
-    
+
     except Exception as e:
-        logging.error(f"Error in search_similar_products: {e}")
+        logger.error(f"Error in search_similar_products: {e}")
         return []
+
+
     
 def rerank_products(user_context, recommended_products):
     """

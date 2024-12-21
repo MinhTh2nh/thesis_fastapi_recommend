@@ -1,21 +1,21 @@
-from app.models.embedding import ChunkingRequest, EmbeddingRequest
+from app.services.personalized_production import get_user_embeddings,search_similar_products_Rec, generate_recommendations, serialize_objectid
 from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
-from fastapi import APIRouter, HTTPException
-from app.services.user_service import get_user_data, preprocess_user_data
 from app.services.search_service import get_query_embedding, search_similar_products, rerank_products
+from app.services.user_service import get_user_data, preprocess_user_data
 # from app.services.embedding_service import get_user_embeddings_context
+from app.models.embedding import ChunkingRequest, EmbeddingRequest
 # from app.services.recommendation import RAGPipelineHandler, 
-from app.services.personalized_production import get_user_embeddings,search_similar_products, generate_recommendations, serialize_objectid
-from app.models.product import RecommendRequest
-from app.models.user import QueryRequest
 from sentence_transformers import SentenceTransformer
-from pymongo import MongoClient
-from typing import List
-import os
+from app.models.product import RecommendRequest
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from app.models.user import QueryRequest
+from pymongo import MongoClient
 from dotenv import load_dotenv
+from typing import List
 import numpy as np
 import logging
+import os
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -49,7 +49,7 @@ async def recommend_products(request: RecommendRequest):
             raise HTTPException(status_code=500, detail="Failed to generate user embedding")
 
         # Step 4: Retrieve similar products
-        similar_products = search_similar_products(user_embedding)
+        similar_products = search_similar_products_Rec(user_embedding)
         if not similar_products:
             return JSONResponse(
                 status_code=404,
@@ -70,8 +70,8 @@ async def recommend_products(request: RecommendRequest):
             status_code=200,
             content={
                 "user_id": request.user_id,
-                "recommendations": serialized_products,
-                "message": response,
+                # "recommendations": serialized_products,
+                "recommendations": response,
             },
         )
 
@@ -103,7 +103,7 @@ async def search_products(request: QueryRequest):
             content={
                 "user_query": request.query,
                 "session_contex": session_context,
-                "refined_products": serialized_results,
+                # "refined_products": serialized_results,
                 "rank_product_llm": reranked_candidates,
             },
         )

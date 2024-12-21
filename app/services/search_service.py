@@ -93,7 +93,7 @@ def get_query_embedding(request: QueryRequest):
     return query_embedding
 
 
-def search_similar_products(user_embedding, k=20):
+def search_similar_products(user_embedding, k=30):
     query_embedding = user_embedding.tolist()
     results = db.products.aggregate([
         {
@@ -106,7 +106,8 @@ def search_similar_products(user_embedding, k=20):
             }
         }
     ])
-    return results
+    return list(results)  # Convert the cursor to a list
+
 
 def preprocess_query(query: str) -> str:
     """
@@ -120,21 +121,16 @@ def preprocess_query(query: str) -> str:
     """
     # Step 1: Convert to lowercase
     query = query.lower()
-
     # Step 2: Apply synonym replacement (expand product-related terms)
     query = " ".join([synonyms.get(word, word) for word in query.split()])
-    
     # Step 3: Apply Named Entity Recognition to extract relevant entities (e.g., jackets, coats, etc.)
     doc = nlp(query)
     entities = [ent.text for ent in doc.ents]  # Extract entities
     entities_str = " ".join(entities)  # Combine into a string
-
     # Step 4: Remove non-product related words (optional)
     query = re.sub(r'\b(?:the|is|are|a|for|and|in|on|of|to|with|this|it|how|what|where|best|a|an|in|at|by)\b', '', query)
-    
     # Step 5: Apply stemming to reduce word variants to base form (e.g., "coats" -> "coat")
     query = " ".join([stemmer.stem(word) for word in query.split()])
-
     # Combine entities with filtered query terms
     query = entities_str + " " + query
     return query.strip()
@@ -143,7 +139,7 @@ def rerank_products(query, similar_products):
     query = preprocess_query(query)
     print(query)
     product_details = [
-        f'{product.get("name", "Unknown Product")} (Color: {product.get("color", "Unknown Color")}, Price: ${product.get("price", "Unknown Price")})'
+        f'{product.get("namename", "Unknown Product")} (Color: {product.get("color", "Unknown Color")}, Price: ${product.get("price", "Unknown Price")})'
         for product in similar_products
     ]
     queries = [query]*len(product_details)
@@ -173,102 +169,3 @@ def rerank_products(query, similar_products):
         reranked_products = sorted(similar_products, key=lambda x: x["score"], reverse=True)
 
     return reranked_products
-
-
-# def cosine_similarity(query_vector, product_vector):
-#     query_vector = np.array(query_vector)
-#     product_vector = np.array(product_vector)
-#     return np.dot(query_vector, product_vector) / (np.linalg.norm(query_vector) * np.linalg.norm(product_vector))
-
-# def extract_initial_candidates(result: List[Dict], query_vector: np.ndarray) -> List[Dict]:
-#     candidates = [
-#         {
-#             "_id": str(doc["_id"]),
-#             "name": doc["name"],
-#             "sizes": doc["sizes"],
-#             "category": doc["category"],
-#             "color": doc["color"],
-#             "images": doc["images"],
-#             "total_stock": doc["total_stock"],
-#             "review_count": doc["review_count"],
-#             "rating_count": doc["rating_count"],
-#             "description": doc["description"],
-#             "avg_rating": doc["avg_rating"],
-#             "price": doc["price"],
-#             "description_embedding": doc["description_embedding"],
-#             "cosine_similarity": cosine_similarity(query_vector, doc["description_embedding"])
-#         }
-#         for doc in result
-#     ]
-#     return candidates
-
-# def sort_candidates_by_similarity(candidates: List[Dict], top_k: int) -> List[Dict]:
-#     return sorted(candidates, key=lambda x: x["cosine_similarity"], reverse=True)[:top_k]
-
-# def sort_candidates_by_rerank_scores(candidates: List[Dict], top_k: int) -> List[Dict]:
-#     return sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
-
-# def search_similar_products(user_embedding, top_n=100):
-#     # Convert the user embedding to a list for MongoDB compatibility
-#     query_embedding = user_embedding.tolist()
-#     # Perform the vector search in MongoDB using the aggregation pipeline
-#     results = db.products.aggregate([
-#         {
-#             "$vectorSearch": {
-#                 "index": "vector_index",  # The name of your vector index
-#                 "path": "description_embedding",  # The field storing the product embeddings
-#                 "queryVector": query_embedding,  # The user query vector
-#                 "numCandidates": 100,  # Number of candidates to search from
-#                 "limit": top_n  # Limit the results to top N
-#             }
-#         }
-#     ])
-#     return results
-
-
-# def search_similar_products_none_tolist(user_embedding, top_n=100):
-#     # Convert the user embedding to a list for MongoDB compatibility
-#     query_embedding = user_embedding
-#     # Perform the vector search in MongoDB using the aggregation pipeline
-#     cursor = db.products.aggregate([
-#         {
-#             "$vectorSearch": {
-#                 "index": "vector_index",  # The name of your vector index
-#                 "path": "description_embedding",  # The field storing the product embeddings
-#                 "queryVector": query_embedding,  # The user query vector
-#                 "numCandidates": 100,  # Number of candidates to search from
-#                 "limit": top_n  # Limit the results to top N
-#             }
-#         }
-#     ])
-#     # Convert the cursor to a list
-#     results = list(cursor)
-#     for result in results:
-#         if "_id" in result and isinstance(result["_id"], ObjectId):
-#             result["_id"] = str(result["_id"])
-
-#     return results
-
-# def rerank(query, sorted_candidates):
-#     """
-#     Rerank the sorted candidates based on their relevance to the query and return the top 6 results.
-
-#     Args:
-#         query (str): The user query.
-#         sorted_candidates (list): List of product dictionaries sorted by initial cosine similarity.
-
-#     Returns:
-#         list: Top 6 reranked product dictionaries with an added 'reason' field.
-#     """
-#     # Prepare the input prompt for reranking
-#     product_descriptions = [
-#         f"{i + 1}. {product['name']} (ID: {product['_id']})"
-#         for i, product in enumerate(sorted_candidates)
-#     ]
-#     queries = [query]*len(product_descriptions)
-#     features = reranker_tokenizer(queries, product_descriptions,  padding=True, truncation=True, return_tensors="pt").to(device)
-#     # Tokenize the input prompt
-#     with torch.no_grad():
-#             scores = reranker_model(**features).logits
-#             values, indices = torch.sum(scores, dim=1).sort()
-#     return [sorted_candidates[indices[0]],sorted_candidates[indices[1]],sorted_candidates[indices[2]]]
