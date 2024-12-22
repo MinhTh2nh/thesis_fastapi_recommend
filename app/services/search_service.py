@@ -67,8 +67,8 @@ def cosine_similarity(query_vector, product_vector):
 def extract_initial_candidates(result: List[Dict], query_vector: np.ndarray) -> List[Dict]:
     candidates = [
         {
-            "product_id": str(doc["_id"]),
-            "product_name": doc["name"],
+            "_id": str(doc["_id"]),
+            "name": doc["name"],
             "sizes": doc["sizes"],
             "category": doc["category"],
             "color": doc["color"],
@@ -146,7 +146,7 @@ def rerank(query, sorted_candidates):
     """
     # Prepare the input prompt for reranking
     product_descriptions = [
-        f"{i + 1}. {product['product_name']} (ID: {product['product_id']})"
+        f"{i + 1}. {product['name']} (ID: {product['_id']})"
         for i, product in enumerate(sorted_candidates)
     ]
     queries = [query]*len(product_descriptions)

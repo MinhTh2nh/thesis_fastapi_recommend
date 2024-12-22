@@ -3,7 +3,6 @@ regex
 fastapi
 pydantic
 uvicorn[standard]
-myapi
 pymongo
 sentence-transformers
 scikit-learn
