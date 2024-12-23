@@ -1,25 +1,32 @@
-import os
 import re
+import os
 import nltk
 import torch
 import spacy
 import logging
-from typing import List, Dict
 from fastapi import APIRouter
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from nltk.corpus import stopwords
 from huggingface_hub import login
-from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 from app.models.user import QueryRequest
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 nltk.download('punkt') 
+nltk.download('stopwords')
+nltk.download('wordnet')
+
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load SpaCy's English model for Named Entity Recognition
 nlp = spacy.load("en_core_web_sm")
+
+# Initialize the stemmer for stemming
+lemmatizer = WordNetLemmatizer()
 
 # Optional: A synonym mapping for common product-related terms (adjust as needed)
 synonyms = {
@@ -30,9 +37,6 @@ synonyms = {
     "sweater": "jumper",
     "outerwear": "coat"
 }
-
-# Initialize stemmer for stemming words (useful for matching variants like "coat" and "coats")
-stemmer = PorterStemmer()
 
 # FastAPI Router
 router = APIRouter()
@@ -109,6 +113,7 @@ def search_similar_products(user_embedding, k=30):
     return list(results)  # Convert the cursor to a list
 
 
+# Function to preprocess query by removing stop words and applying lemmatization
 def preprocess_query(query: str) -> str:
     """
     Preprocess the input query by normalizing it, removing stop words, and extracting key terms.
@@ -121,16 +126,29 @@ def preprocess_query(query: str) -> str:
     """
     # Step 1: Convert to lowercase
     query = query.lower()
+
     # Step 2: Apply synonym replacement (expand product-related terms)
     query = " ".join([synonyms.get(word, word) for word in query.split()])
+
     # Step 3: Apply Named Entity Recognition to extract relevant entities (e.g., jackets, coats, etc.)
     doc = nlp(query)
     entities = [ent.text for ent in doc.ents]  # Extract entities
     entities_str = " ".join(entities)  # Combine into a string
-    # Step 4: Remove non-product related words (optional)
-    query = re.sub(r'\b(?:the|is|are|a|for|and|in|on|of|to|with|this|it|how|what|where|best|a|an|in|at|by)\b', '', query)
-    # Step 5: Apply stemming to reduce word variants to base form (e.g., "coats" -> "coat")
-    query = " ".join([stemmer.stem(word) for word in query.split()])
+
+    # Step 4: Tokenize the query and remove stopwords selectively
+    stop_words = set(stopwords.words('english'))
+    tokens = word_tokenize(query)
+
+    # We will remove stopwords, but keep words like 'want' or 'maybe'
+    important_stopwords = {"want", "maybe", "new"}  # Adjust as needed
+    tokens = [word for word in tokens if word not in stop_words or word in important_stopwords]
+
+    # Step 5: Apply lemmatization to reduce words to their base form (e.g., "running" -> "run")
+    tokens = [lemmatizer.lemmatize(word) for word in tokens]
+
+    # Combine the tokens back into a query string
+    query = " ".join(tokens)
+
     # Combine entities with filtered query terms
     query = entities_str + " " + query
     return query.strip()
@@ -139,7 +157,7 @@ def rerank_products(query, similar_products):
     query = preprocess_query(query)
     print(query)
     product_details = [
-        f'{product.get("namename", "Unknown Product")} (Color: {product.get("color", "Unknown Color")}, Price: ${product.get("price", "Unknown Price")})'
+        f'{product.get("name", "Unknown Product")} (Color: {product.get("color", "Unknown Color")}, Price: ${product.get("price", "Unknown Price")})'
         for product in similar_products
     ]
     queries = [query]*len(product_details)

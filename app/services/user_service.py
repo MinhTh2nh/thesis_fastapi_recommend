@@ -1,7 +1,21 @@
 import os
+import string
+import re
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from bson.objectid import ObjectId
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+import nltk
+
+nltk.download('punkt')
+nltk.download('punkt_tab')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+# Initialize the stemmer and lemmatizer
+lemmatizer = WordNetLemmatizer()
 
 # loading variables from .env file
 load_dotenv()
@@ -13,74 +27,115 @@ users_collection = db["users"]
 orders_collection = db["orders"]
 cart_collection = db["carts"]
 
-def get_user_data(user_id):
-    user_id_obj = ObjectId(user_id)
-    # Fetch user details including search history
-    user = users_collection.find_one({"_id": user_id_obj})
-    if not user:
-        print(f"User with ID {user_id} not found.")  # Log if the user is not found
-        return None, [], [], []  # Return empty lists if user not found
+# Helper function to retrieve product name
+def get_product_name(product_id):
+    product = products_collection.find_one({"_id": product_id})
+    if product:
+        return product.get("name", "Unknown Product")
+    return "Unknown Product"
 
-    # Fetch order history and cart items
-    orders = list(orders_collection.find({"userId": user_id_obj})) or []
-    cart_items = list(cart_collection.find({"userId": user_id_obj})) or []
-
-    # Extract search history from the user document
-    search_history = user.get("search_history", []) or []
-
-    return orders, cart_items, search_history
-
-def preprocess_user_data(orders, cart_items, search_history):
+# Helper function to clean text
+def clean_text(text):
     """
-    Preprocess user data by retrieving product names from the products collection.
+    Clean input text by removing punctuation, numbers, and stopwords.
+
+    Args:
+        text (str): Raw input text.
+
+    Returns:
+        cleaned_text (str): Processed and cleaned text.
+    """
+    # Convert text to lowercase
+    text = text.lower()
+
+    # Remove punctuation and numbers
+    text = text.translate(str.maketrans("", "", string.punctuation))
+    text = re.sub(r'\d+', '', text)
+
+    # Tokenize text
+    text_tokens = word_tokenize(text)
+
+    # Remove stopwords
+    stop_words = set(stopwords.words('english'))
+    filtered_tokens = [word for word in text_tokens if word not in stop_words]
+
+    # Apply lemmatization if specified
+    filtered_tokens = [lemmatizer.lemmatize(word) for word in filtered_tokens]
+
+
+    # Join the processed tokens into a single string
+    cleaned_text = " ".join(filtered_tokens)
+
+    return cleaned_text
+
+# Function to process user data
+def preprocess_user_data(orders, cart_items, search_history, apply_stemming=False):
+    """
+    Preprocess user data including search history, order history, and cart data.
 
     Args:
         orders (list): List of order documents.
         cart_items (list): List of cart documents.
         search_history (list): List of search history strings.
-        products_collection: MongoDB collection object for products.
 
     Returns:
-        dict: Processed user data containing order products, cart products, and search history.
+        combined_data (str): Cleaned and combined data from search history, orders, and cart.
     """
-    # Helper function to retrieve product details by productId
-    def get_product_name(product_id):
-        product = products_collection.find_one({"_id": product_id})
-        return product.get("name", "Unknown Product") if product else "Unknown Product"
+    processed_data = []
 
-    # Process order items (Product Name, Quantity)
-    order_products = []
-    for order in orders:
-        for item in order['items']:
-            product_name = get_product_name(item['productId'])  # Fetch product name
-            product = {
-                'product_name': product_name,
-                'quantity': item['quantity'],
-                'size': item['size'],
-                'price': item['price']
-            }
-            order_products.append(product)
+    # Process search history: Join all search terms and clean up
+    if search_history:
+        processed_search_history = " ".join(search_history)
+        processed_search_history = clean_text(processed_search_history)
+        processed_data.append(processed_search_history)
 
-    # Process cart items (Product Name)
-    cart_products = []
-    for cart_item in cart_items:
-        for item in cart_item['items']:
-            product_name = get_product_name(item['productId'])  # Fetch product name
-            product = {
-                'product_name': product_name,
-                'quantity': item['quantity'],
-                'size': item['size']
-            }
-            cart_products.append(product)
+    # Process order history: Join product names, quantity, and size, and clean up
+    if orders:
+        order_descriptions = []
+        for order in orders:
+            for item in order['items']:
+                product_name = get_product_name(item['productId'])
+                order_descriptions.append(f"{product_name}")
+        processed_order_history = " ".join(order_descriptions)
+        processed_order_history = clean_text(processed_order_history)
+        processed_data.append(processed_order_history)
 
-    # Process search history (if available)
-    search_history_data = search_history or []  # Assuming empty if None
+    # Process cart products: Join product names, quantity, and size, and clean up
+    if cart_items:
+        cart_descriptions = []
+        for cart_item in cart_items:
+            for item in cart_item['items']:
+                product_name = get_product_name(item['productId'])
+                cart_descriptions.append(f"{product_name}")
+        processed_cart_products = " ".join(cart_descriptions)
+        processed_cart_products = clean_text(processed_cart_products)
+        processed_data.append(processed_cart_products)
 
-    # Combine all data for recommendation purposes
-    processed_data = {
-        'order_products': order_products,
-        'cart_products': cart_products,
-        'search_history': search_history_data
-    }
+    # Combine all processed data
+    combined_data = " ".join(processed_data)
 
-    return processed_data
+    return combined_data
+
+# Function to fetch user data from the database
+def get_user_data(user_id):
+    user_id_obj = ObjectId(user_id)
+    
+    try:
+        # Fetch user details including search history
+        user = users_collection.find_one({"_id": user_id_obj})
+        if not user:
+            print(f"User with ID {user_id} not found.")  # Log if the user is not found
+            return None, [], [], []  # Return empty lists if user not found
+
+        # Fetch order history and cart items
+        orders = list(orders_collection.find({"userId": user_id_obj})) or []
+        cart_items = list(cart_collection.find({"userId": user_id_obj})) or []
+
+        # Extract search history from the user document
+        search_history = user.get("search_history", []) or []
+
+        return orders, cart_items, search_history
+    except Exception as e:
+        print(f"Error fetching user data: {e}")
+        return None, [], [], []
+

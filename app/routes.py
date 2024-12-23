@@ -1,4 +1,4 @@
-from app.services.personalized_production import get_user_embeddings,search_similar_products_Rec, generate_recommendations, serialize_objectid
+from app.services.personalized_production import get_user_embeddings,search_similar_products_Rec, serialize_objectid, get_popular_products
 from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
 from app.services.search_service import get_query_embedding, search_similar_products, rerank_products
 from app.services.user_service import get_user_data, preprocess_user_data
@@ -30,21 +30,36 @@ client = MongoClient(os.getenv("MY_URI_MONGODB"))
 db = client['mydatabase']
 products_collection = db["products"]
 
-
 @router.post("/recommend")
 async def recommend_products(request: RecommendRequest):
     try:
         # Step 1: Fetch and validate user data
         orders, cart_items, search_history = get_user_data(request.user_id)
         logging.info(f"User data fetched successfully for user ID: {request.user_id}")
+        print("Orders: ", orders)
+        print("Cart items: ", cart_items)
+        print("Search history: ", search_history)
+        # Check if user data is empty or insufficient
+        if (not orders or len(orders) == 0) and (not cart_items or len(cart_items) == 0) and (not search_history or len(search_history) == 0):
+            logging.warning(f"Cold start detected for user ID: {request.user_id}")
+            
+            # Recommend popular or trending products for cold start users
+            popular_products = get_popular_products()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "user_id": request.user_id,
+                    "recommendations": popular_products,
+                },
+            )
+
+        
+        # Step 2: Process user data
         processed_user_data = preprocess_user_data(orders, cart_items, search_history)
+        print("Processed user data: ", processed_user_data)
 
         # Step 3: Generate user embedding
-        user_embedding = get_user_embeddings(
-            processed_user_data["order_products"],
-            processed_user_data["cart_products"],
-            processed_user_data["search_history"],
-        )
+        user_embedding = get_user_embeddings(processed_user_data)
         if user_embedding is None:
             raise HTTPException(status_code=500, detail="Failed to generate user embedding")
 
@@ -57,11 +72,11 @@ async def recommend_products(request: RecommendRequest):
             )
         logging.info(f"Found {len(similar_products)} similar products")
 
-        # **Ensure serialization of MongoDB ObjectId fields**
+        # Ensure serialization of MongoDB ObjectId fields
         serialized_products = [serialize_objectid(product) for product in similar_products]
 
         # Step 5: Generate LLM response for recommendations
-        response = generate_recommendations(processed_user_data, serialized_products)
+        response = rerank_products(processed_user_data, serialized_products)
         if not response:
             raise HTTPException(status_code=500, detail="Failed to generate LLM response")
 
@@ -70,7 +85,6 @@ async def recommend_products(request: RecommendRequest):
             status_code=200,
             content={
                 "user_id": request.user_id,
-                # "recommendations": serialized_products,
                 "recommendations": response,
             },
         )
@@ -81,7 +95,6 @@ async def recommend_products(request: RecommendRequest):
     except Exception as e:
         logging.error(f"Unexpected error in /recommend API: {str(e)}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
-
 
 @router.post("/search")
 # @router.post("/search")

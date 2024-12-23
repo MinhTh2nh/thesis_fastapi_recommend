@@ -79,53 +79,9 @@ def serialize_objectid(obj):
     else:
         return obj
 
-def get_user_embeddings(orders, cart_items, search_history):
-    """
-    Generate embeddings for a user's interactions based on their orders, cart items, and search history.
-
-    Args:
-        orders (list): A list of orders, each containing a dictionary with product details.
-        cart_items (list): A list of items in the user's cart, each containing a dictionary with product details.
-        search_history (list): A list of product identifiers or descriptions from the user's search history.
-
-    Returns:
-        torch.Tensor or None: A tensor of product embeddings or None if no valid products are found.
-    """
-    all_products = []  # List to store product identifiers or descriptions
-
-    # Extract product IDs from orders
-    if orders and isinstance(orders, list):
-        for order in orders:
-            if isinstance(order, dict):
-                for item in order.get('items', []):  # Use .get() to avoid KeyError
-                    if isinstance(item, dict):
-                        product_id = item.get('productId')  # Safely retrieve product ID
-                        if product_id:
-                            all_products.append(str(product_id))
-
-    # Extract product IDs from cart items
-    if cart_items and isinstance(cart_items, list):
-        for cart_item in cart_items:
-            if isinstance(cart_item, dict):
-                product_id = cart_item.get('productId')
-                if product_id:
-                    all_products.append(str(product_id))
-
-    # Add product identifiers or descriptions from search history
-    if search_history and isinstance(search_history, list):
-        all_products.extend(str(product) for product in search_history if isinstance(product, (str, int)))
-
-    # Handle case where no valid product data is found
-    if not all_products:
-        return None  # Return None or a default value (e.g., an empty tensor)
-
-    # Generate embeddings for all products
-    try:
-        embeddings = model_embedding.encode(all_products, convert_to_tensor=True)  # Assuming `model` is preloaded
-        return embeddings
-    except Exception as e:
-        logging.error(f"Failed to generate embeddings: {e}")
-        return None
+def get_user_embeddings(preprocessed_user_data):
+    query_embedding = model_embedding.encode(preprocessed_user_data, convert_to_tensor=True)
+    return query_embedding
 
 import torch
 
@@ -139,10 +95,10 @@ def search_similar_products_Rec(user_embedding, k=21):
         list: A list of dictionaries containing product IDs and product names of the most similar products.
     """
     try:
-        # Aggregate user embeddings to a single vector
-        if len(user_embedding.shape) > 1:
-            user_embedding = torch.mean(user_embedding, dim=0)  # Reduce to 1D
-        # Convert tensor to list of floats
+        # # Aggregate user embeddings to a single vector
+        # if len(user_embedding.shape) > 1:
+        #     user_embedding = torch.mean(user_embedding, dim=0)  # Reduce to 1D
+        # # Convert tensor to list of floats
         query_embedding = user_embedding.cpu().numpy().tolist()
         
         # Perform the vector search in MongoDB
@@ -166,6 +122,20 @@ def search_similar_products_Rec(user_embedding, k=21):
         logger.error(f"Error in search_similar_products: {e}")
         return []
 
+def get_popular_products(limit=21):
+    """
+    Retrieve popular or trending products from the database.
+    Args:
+        limit (int): The maximum number of products to retrieve.
+    Returns:
+        list: A list of popular or trending products.
+    """
+    popular_products = list(
+        products_collection.find()
+        .sort([("sold_count", -1), ("avg_rating", -1)])  # Sort by sold_count and avg_rating
+        .limit(limit)
+    )
+    return [serialize_objectid(product) for product in popular_products]
 
     
 def rerank_products(user_context, recommended_products):
@@ -214,40 +184,40 @@ def rerank_products(user_context, recommended_products):
         logger.error(f"Error reranking products: {e}")
         return []
 
-def generate_recommendations(user_data, recommended_products):
-    """
-    Generate reranked product recommendations based on user data.
+# def generate_recommendations(user_data, recommended_products):
+#     """
+#     Generate reranked product recommendations based on user data.
 
-    Args:
-        user_data (dict): The user's interaction history (orders, cart items, search history).
-        recommended_products (list): The initial list of recommended products.
+#     Args:
+#         user_data (dict): The user's interaction history (orders, cart items, search history).
+#         recommended_products (list): The initial list of recommended products.
 
-    Returns:
-        list: Reranked list of product recommendations.
-    """
-    try:
-        # Extract and format user history data
-        order_history = "\n".join([f"{entry['product_name']} (Size: {entry['size']}, Price: {entry['price']})"
-                                   for entry in user_data.get('order_products', [])])
+#     Returns:
+#         list: Reranked list of product recommendations.
+#     """
+#     try:
+#         # Extract and format user history data
+#         order_history = "\n".join([f"{entry['product_name']}Price: {entry['price']})"
+#                                    for entry in user_data.get('order_products', [])])
         
-        cart_history = "\n".join([f"{entry['product_name']} (Size: {entry['size']}, Price: {entry['price']})"
-                                  for entry in user_data.get('cart_products', [])])
+#         cart_history = "\n".join([f"{entry['product_name']}"
+#                                   for entry in user_data.get('cart_products', [])])
         
-        search_history = "\n".join([f"{entry}" for entry in user_data.get('search_history', [])])
+#         search_history = "\n".join([f"{entry}" for entry in user_data.get('search_history', [])])
 
-        # Combine history into a single string
-        user_context = f"Order History:\n{order_history if order_history else 'No orders yet.'}\n" \
-                       f"Cart Items:\n{cart_history if cart_history else 'No items in the cart.'}\n" \
-                       f"Search History:\n{search_history if search_history else 'No search history.'}"
+#         # Combine history into a single string
+#         user_context = f"Order History:\n{order_history if order_history else 'No orders yet.'}\n" \
+#                        f"Cart Items:\n{cart_history if cart_history else 'No items in the cart.'}\n" \
+#                        f"Search History:\n{search_history if search_history else 'No search history.'}"
 
-        # Rerank the products
-        reranked_products = rerank_products(user_context, recommended_products)
+#         # Rerank the products
+#         reranked_products = rerank_products(user_context, recommended_products)
 
-        return reranked_products
+#         return reranked_products
 
-    except Exception as e:
-        logger.error(f"Error generating recommendations: {e}")
-        return []
+#     except Exception as e:
+#         logger.error(f"Error generating recommendations: {e}")
+#         return []
 
 
 
