@@ -1,19 +1,24 @@
-from app.models.embedding import ChunkingRequest, EmbeddingRequest
+from app.services.personalized_production import get_user_embeddings,search_similar_products_Rec, serialize_objectid, get_popular_products
 from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
-from fastapi import APIRouter, HTTPException
+from app.services.search_service import get_query_embedding, search_similar_products, rerank_products
 from app.services.user_service import get_user_data, preprocess_user_data
-from app.services.search_service import cosine_similarity, extract_initial_candidates, sort_candidates_by_similarity, rerank, search_similar_products, search_similar_products_none_tolist
-from app.services.embedding_service import get_user_embeddings_context
-from app.services.recommendation import RAGPipelineHandler, extract_user_preferences
-from app.models.product import RecommendRequest
-from app.models.user import QueryRequest
+# from app.services.embedding_service import get_user_embeddings_context
+from app.models.embedding import ChunkingRequest, EmbeddingRequest
 from sentence_transformers import SentenceTransformer
-from pymongo import MongoClient
-from typing import List
-import os
+from app.models.product import RecommendRequest
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from app.models.user import QueryRequest
+from pymongo import MongoClient
 from dotenv import load_dotenv
+from typing import List
 import numpy as np
+import logging
+import os
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -27,28 +32,75 @@ products_collection = db["products"]
 @router.post("/recommend")
 async def recommend_products(request: RecommendRequest):
     try:
-        # Fetch user data
-        user, orders, cart_items, search_history = get_user_data(request.user_id)
+                # Check if user_id is provided in the request
+        if not request.user_id:
+            logging.warning("No user_id provided, recommending popular products.")
+            
+            # Recommend popular or trending products if no user_id is available
+            popular_products = get_popular_products()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "No user_id provided, recommending popular products.",
+                    "recommendations": popular_products,
+                },
+            )
+        # Step 1: Fetch and validate user data
+        orders, cart_items, search_history = get_user_data(request.user_id)
+        logging.info(f"User data fetched successfully for user ID: {request.user_id}")
+        # Check if user data is empty or insufficient
+        if (not orders or len(orders) == 0) and (not cart_items or len(cart_items) == 0) and (not search_history or len(search_history) == 0):
+            logging.warning(f"Cold start detected for user ID: {request.user_id}")
+            
+            # Recommend popular or trending products for cold start users
+            popular_products = get_popular_products()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "user_id": request.user_id,
+                    "recommendations": popular_products,
+                },
+            )
+        
+        # Step 2: Process user data
+        processed_user_data = preprocess_user_data(orders, cart_items, search_history)
+        # Step 3: Generate user embedding
+        user_embedding = get_user_embeddings(processed_user_data)
+        if user_embedding is None:
+            raise HTTPException(status_code=500, detail="Failed to generate user embedding")
 
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        processed_user_data = preprocess_user_data(user, orders, cart_items, search_history)
-        # Generate user embedding11
-        session_context = get_user_embeddings_context(processed_user_data)
-        query_vector = model.encode(session_context)
+        # Step 4: Retrieve similar products
+        similar_products = search_similar_products_Rec(user_embedding)
+        if not similar_products:
+            return JSONResponse(
+                status_code=404,
+                content={"message": "No similar products found for the user."},
+            )
+        logging.info(f"Found {len(similar_products)} similar products")
 
-        # Ensure the vector is serializable
-        query_vector_serializable = query_vector.tolist() 
-        similar_products = search_similar_products_none_tolist(query_vector_serializable)
-        rag_handler = RAGPipelineHandler(retriever=search_similar_products)  # Pass the retriever explicitly
-        recommended_products = rag_handler.rag(processed_user_data, similar_products)
-        return {
-            "user_id": request.user_id,
-            "similar_products": similar_products,
-            "recommended_products": recommended_products,
-        }
+        # Ensure serialization of MongoDB ObjectId fields
+        serialized_products = [serialize_objectid(product) for product in similar_products]
+
+        # Step 5: Generate LLM response for recommendations
+        response = rerank_products(processed_user_data, serialized_products)
+        if not response:
+            raise HTTPException(status_code=500, detail="Failed to generate LLM response")
+
+        # Step 6: Return serialized response
+        return JSONResponse(
+            status_code=200,
+            content={
+                "user_id": request.user_id,
+                "recommendations": response,
+            },
+        )
+
+    except HTTPException as http_err:
+        logging.error(f"HTTP error in /recommend API: {http_err.detail}")
+        raise http_err
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Unexpected error in /recommend API: {str(e)}")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred")
 
 @router.post("/search")
 # @router.post("/search")
@@ -56,31 +108,21 @@ async def search_products(request: QueryRequest):
     try:
         # Build full query from session context and the current query
         session_context = request.session_context + [request.query]
-        full_query = " ".join(session_context)
+        # full_query = " ".join(session_context)
         # Generate query vector using the embedding model
-        query_vector = model.encode(full_query)
+        query_vector = get_query_embedding(request)  # Pass the whole request object
         # Fetch initial candidates from MongoDB using vector search
-        result = search_similar_products(query_vector)
-        # Collect initial candidates and their embeddings
-        initial_candidates = extract_initial_candidates(result, query_vector)
-        # Calculate cosine similarity between query and product embeddings
-        for candidate in initial_candidates:
-            candidate["cosine_similarity"] = cosine_similarity(query_vector, candidate["description_embedding"])
-        # Sort candidates by cosine similarity and limit to top_k
-        sorted_candidates = sort_candidates_by_similarity(initial_candidates, request.top_k)
-        sorted_candidates_without_embedding = [
-            {**{key: value for key, value in candidate.items() if key != 'description_embedding'}, 'rank': index + 1}
-            for index, candidate in enumerate(sorted_candidates)
-        ]
+        results = search_similar_products(query_vector)
+        serialized_results = serialize_objectid(results)
         # Rerank candidates using the rerank service
-        reranked_candidates = rerank(request.query, sorted_candidates)
+        reranked_candidates = rerank_products(request.query, serialized_results)
         # Build final response
         return JSONResponse(
             status_code=200,
             content={
                 "user_query": request.query,
                 "session_contex": session_context,
-                "refined_products": sorted_candidates_without_embedding,
+                # "refined_products": serialized_results,
                 "rank_product_llm": reranked_candidates,
             },
         )

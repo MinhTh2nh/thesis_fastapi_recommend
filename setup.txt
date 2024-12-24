@@ -16,3 +16,5 @@ langchain_community
 langchain_huggingface
 matplotlib
 hnswlib
+spacy
+nltk
