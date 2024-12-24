@@ -1,6 +1,10 @@
+import traceback
+from aiohttp import ClientSession
+import aiohttp
+import pandas as pd
 from app.models.embedding import ChunkingRequest, EmbeddingRequest
 from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, logger
 from app.services.user_service import get_user_data, preprocess_user_data
 from app.services.search_service import cosine_similarity, extract_initial_candidates, sort_candidates_by_similarity, rerank, search_similar_products, search_similar_products_none_tolist
 from app.services.embedding_service import get_user_embeddings_context
@@ -14,6 +18,8 @@ import os
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import numpy as np
+from fastapi import FastAPI, File, UploadFile, Request, HTTPException, Form
+import json
 
 load_dotenv()
 
@@ -88,20 +94,71 @@ async def search_products(request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 @router.post("/chunking")
-async def process_chunking(request: ChunkingRequest):
+async def process_chunking(
+    files: List[UploadFile] = File(...),
+    file_type: str = Form(...),
+):
     try:
-        # Clean the uploaded file
-        cleaned_data = clean_file(request.files)
-        products = generate_chunking_products(cleaned_data)
+        # Process each file and clean data
+        cleaned_data_list = [await clean_file(file) for file in files]
+        
+        # Combine all cleaned data into one DataFrame
+        cleaned_data_combined = pd.concat(cleaned_data_list, ignore_index=True)
+        
+        # Generate chunking products from the combined data
+        products = generate_chunking_products(cleaned_data_combined)
+
+        # Prepare data for POST request
+        url = "http://localhost:3001/api/products/chunking"
+
+        payload = {
+            "chunking_list": products,
+            "file_name": [file.filename for file in files],
+            "file_type": file_type,
+        }
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, json=payload) as response:
+                    # Handle external response
+                    if response.status == 200:
+                        external_response = await response.json()
+                        if external_response.get('status') == 'success':
+                            data = external_response.get('data', {})
+
+                            return JSONResponse(
+                                status_code=200,
+                                content={"data": data},
+                            )
+                        else:
+                            return JSONResponse(
+                                status_code=400,
+                                content={"error": "Failed to process chunking data", "details": external_response},
+                            )
+                    else:
+                        return JSONResponse(
+                            status_code=response.status,
+                            content={"error": f"Unexpected status code: {response.status}"},
+                        )
+            except Exception as e:
+                logger.error('Error communicating with Node.js server:', exc_info=True)
+                return JSONResponse(
+                    content={"error": "An unexpected error occurred during external request", "details": str(e)},
+                    status_code=500,
+                )
+            
+        # Return JSON response
         return JSONResponse(
             status_code=200,
             content={
-                 "chunking_products": products,
-                 "model": request.model 
+                "chunking_products": products,
+                "file_names": [file.filename for file in files],
+                "file_type": file_type,
+                "payload": payload,
             },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
     
 @router.post("/embedding")
 async def process_embedding(request: EmbeddingRequest):

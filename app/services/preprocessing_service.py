@@ -5,6 +5,8 @@ import ast
 import numpy as np
 import os
 from dotenv import load_dotenv
+from io import StringIO
+from fastapi import UploadFile
 
 # loading variables from .env file
 load_dotenv()
@@ -30,12 +32,14 @@ def parse_description(description_column):
     except:
         return []   # Return an empty list if parsing fails
     
-def clean_file(files):
-    """Clean and preprocess uploaded files."""
+async def clean_file(file: UploadFile):
     try:
-        # Read content from the first uploaded file
-        file_content = files[0].file.read().decode('utf-8')
-        df = pd.read_csv(pd.compat.StringIO(file_content))  # Read CSV content into a DataFrame
+        # Read content from the uploaded file
+        file_content = await file.read()  # Read the file asynchronously
+        decoded_content = file_content.decode('utf-8')  # Decode bytes to string
+        
+        # Parse CSV content into a DataFrame
+        df = pd.read_csv(StringIO(decoded_content))
 
         # Clean and preprocess data
         df['size'] = df['size'].apply(clean_sizes)
@@ -86,10 +90,8 @@ def generate_chunking_products(df):
         }
 
         # Insert document into MongoDB
-        product_result = product_collection.insert_one(product_document)
         products.append(product_document)
-
-        print(f"Inserted product with product_id: {row['product_id']} and total stock of {total_stock}.")
+        print(f"Generated product with product_id: {row['product_id']} and total stock of {total_stock}.")
 
     return products
 
