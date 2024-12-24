@@ -95,10 +95,6 @@ def search_similar_products_Rec(user_embedding, k=21):
         list: A list of dictionaries containing product IDs and product names of the most similar products.
     """
     try:
-        # # Aggregate user embeddings to a single vector
-        # if len(user_embedding.shape) > 1:
-        #     user_embedding = torch.mean(user_embedding, dim=0)  # Reduce to 1D
-        # # Convert tensor to list of floats
         query_embedding = user_embedding.cpu().numpy().tolist()
         
         # Perform the vector search in MongoDB
@@ -183,41 +179,6 @@ def rerank_products(user_context, recommended_products):
     except Exception as e:
         logger.error(f"Error reranking products: {e}")
         return []
-
-# def generate_recommendations(user_data, recommended_products):
-#     """
-#     Generate reranked product recommendations based on user data.
-
-#     Args:
-#         user_data (dict): The user's interaction history (orders, cart items, search history).
-#         recommended_products (list): The initial list of recommended products.
-
-#     Returns:
-#         list: Reranked list of product recommendations.
-#     """
-#     try:
-#         # Extract and format user history data
-#         order_history = "\n".join([f"{entry['product_name']}Price: {entry['price']})"
-#                                    for entry in user_data.get('order_products', [])])
-        
-#         cart_history = "\n".join([f"{entry['product_name']}"
-#                                   for entry in user_data.get('cart_products', [])])
-        
-#         search_history = "\n".join([f"{entry}" for entry in user_data.get('search_history', [])])
-
-#         # Combine history into a single string
-#         user_context = f"Order History:\n{order_history if order_history else 'No orders yet.'}\n" \
-#                        f"Cart Items:\n{cart_history if cart_history else 'No items in the cart.'}\n" \
-#                        f"Search History:\n{search_history if search_history else 'No search history.'}"
-
-#         # Rerank the products
-#         reranked_products = rerank_products(user_context, recommended_products)
-
-#         return reranked_products
-
-#     except Exception as e:
-#         logger.error(f"Error generating recommendations: {e}")
-#         return []
 
 
 
