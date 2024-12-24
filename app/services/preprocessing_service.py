@@ -94,7 +94,6 @@ def generate_chunking_products(df):
     return products
 
 def generate_embeddings(products):
-    """Generate embeddings for products and return them in the specified response format."""
     embedded_products = []
     for product in products:
         try:
@@ -103,7 +102,6 @@ def generate_embeddings(products):
             price_text = f"Price: {product.get('price', 'Unknown')}"
             full_description = f"{description_text} {color_text} {price_text}"
             embedding = model.encode(full_description).tolist()
-            # Check if the embedding is unchanged
             existing_product = product_collection.find_one({"_id": product["_id"]})
             existing_embedding = existing_product.get("description_embedding")
             if existing_embedding:
