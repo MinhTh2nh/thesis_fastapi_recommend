@@ -3,10 +3,9 @@ from aiohttp import ClientSession
 import aiohttp
 import pandas as pd
 from app.models.embedding import ChunkingRequest, EmbeddingRequest
-from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
 from fastapi import APIRouter, HTTPException, logger
 from app.services.personalized_production import get_user_embeddings,search_similar_products_Rec, serialize_objectid, get_popular_products
-from app.services.preprocessing_service import clean_file, generate_chunking_products, generate_embeddings
+from app.services.preprocessing_service import clean_file, generate_embeddings
 from app.services.search_service import get_query_embedding, search_similar_products, rerank_products
 from app.services.user_service import get_user_data, preprocess_user_data
 # from app.services.embedding_service import get_user_embeddings_context
@@ -148,11 +147,9 @@ async def process_chunking(
         
         # Combine all cleaned data into one DataFrame
         cleaned_data_combined = pd.concat(cleaned_data_list, ignore_index=True)
-        
-        # Generate chunking products from the combined data
-        products = generate_chunking_products(cleaned_data_combined)
+        products = cleaned_data_combined.to_dict(orient="records")
 
-        # Prepare data for POST request
+        # # Prepare data for POST request
         url = "http://localhost:3001/api/products/chunking"
 
         payload = {
