@@ -37,7 +37,12 @@ Ensure you have the following installed on your system:
    pip install -r setup.txt
    ```
 
-4. **Run the Application**
+4. **Install the SpaCy model:**
+   ```bash
+   python -m spacy download en_core_web_sm
+   ```
+
+5. **Run the Application**
 
    Start the application using `uvicorn` with the following command:
    ```bash

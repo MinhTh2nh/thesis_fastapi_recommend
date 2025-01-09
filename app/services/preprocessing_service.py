@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from io import StringIO
 from fastapi import UploadFile
+import random
 
 # loading variables from .env file
 load_dotenv()
@@ -17,83 +18,78 @@ db = client["mydatabase"]
 item_collection = db["items"]
 product_collection = db["products"]
 
+def generate_price(df, min_price=10, max_price=300):
+    # Create a dictionary to store the prices for each product_code
+    product_code_prices = {}
+
+    def get_price_for_product_code(product_code):
+        if product_code not in product_code_prices:
+            # Generate a random price within the specified range
+            price = round(random.uniform(min_price, max_price), 2)
+            product_code_prices[product_code] = price
+        return product_code_prices[product_code]
+
+    # Apply the price generation function to each product based on product_code
+    df['price'] = df['product_code'].apply(get_price_for_product_code)
+
+    return df
+
+async def read_and_parse_file(file: UploadFile) -> pd.DataFrame:
+    file_content = await file.read()
+    decoded_content = file_content.decode('utf-8')
+    return pd.read_csv(StringIO(decoded_content))
+
+def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    categorical_columns = ['detail_desc', 'prod_name', 'product_type_name']
+    df[categorical_columns] = df[categorical_columns].fillna('Unknown')
+    df = df.dropna(subset=['detail_desc']).drop_duplicates(subset='article_id')
+    return df
+
+def filter_unwanted_data(df: pd.DataFrame) -> pd.DataFrame:
+    unwanted_product_types = ['Bra', 'Underwear Tights', 'Socks', 'Leggings/Tights', 'Unknown']
+    df = df[~df['product_type_name'].isin(unwanted_product_types)]
+    df = generate_price(df)
+    return df.rename(columns={
+        'product_code': 'product_code',
+        'prod_name': 'name',
+        'product_type_name': 'category',
+        'colour_group_name': 'color',
+        'article_id': 'product_id',
+        'detail_desc': 'description',
+        'index_name': 'index_name',
+        'price': 'price',
+    })
+
+
+def enrich_with_default_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Adds default values for stock, review, rating data, and image_url."""
+    df['total_stock'] = 100
+    df['sold_count'] = 0
+    df['review_count'] = 0
+    df['rating_count'] = 0
+    df['avg_rating'] = 0.0
+    # Add a default 'image_url' column if it does not exist
+    if 'image_url' not in df.columns:
+        df['image_url'] = ''
+    return df
+
 def clean_sizes(size_column):
     """Clean and parse the size column."""
     if isinstance(size_column, str):
         return [size.replace(" - Out of stock", "") for size in size_column.split(',')]
     return size_column
     
-def parse_description(description_column):
-    """Parse the description column if it is a string representation of a list."""
-    try:
-        if isinstance(description_column, str):
-            return ast.literal_eval(description_column)
-        return description_column
-    except:
-        return []   # Return an empty list if parsing fails
-    
+
 async def clean_file(file: UploadFile):
     try:
-        # Read content from the uploaded file
-        file_content = await file.read()  # Read the file asynchronously
-        decoded_content = file_content.decode('utf-8')  # Decode bytes to string
-        
-        # Parse CSV content into a DataFrame
-        df = pd.read_csv(StringIO(decoded_content))
-
-        # Clean and preprocess data
-        df['size'] = df['size'].apply(clean_sizes)
-        df.rename(columns={'sku': 'product_id'}, inplace=True)
-        df = df.dropna()
-        df = df.drop_duplicates(subset='product_id', keep='first')
-        df = df.reset_index(drop=True)
-        df['description'] = df['description'].apply(parse_description)
-
+        df = await read_and_parse_file(file)
+        df = preprocess_dataframe(df)
+        df = filter_unwanted_data(df)
+        df = enrich_with_default_values(df)
         return df
     except Exception as e:
         raise ValueError(f"Failed to clean the file: {str(e)}")
 
-
-def generate_chunking_products(df):
-    """Generate products from the cleaned file and insert them into the database."""
-    products = []
-
-    for _, row in df.iterrows():
-        # Handle images column
-        if isinstance(row['images'], str):
-            try:
-                images_list = ast.literal_eval(row['images'])
-            except (ValueError, SyntaxError):
-                images_list = []  # Default to an empty list if parsing fails
-        else:
-            images_list = []
-
-        # Prepare sizes and calculate total stock
-        sizes = [{"size_name": size, "stock": 10} for size in row['size']]
-        total_stock = sum(size["stock"] for size in sizes)
-
-        # Create product document
-        product_document = {
-            "name": row['name'],
-            "sizes": sizes,
-            "category": row['category'],
-            "price": row['price'],
-            "color": row['color'],
-            "product_id": row['product_id'],
-            "description": row['description'],
-            "images": images_list,
-            "total_stock": total_stock,
-            "sold_count": 0,
-            "review_count": 0,
-            "rating_count": 0,
-            "avg_rating": 0.0,
-        }
-
-        # Insert document into MongoDB
-        products.append(product_document)
-        print(f"Generated product with product_id: {row['product_id']} and total stock of {total_stock}.")
-
-    return products
 
 def generate_embeddings(products):
     embedded_products = []
