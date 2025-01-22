@@ -83,56 +83,26 @@ def clean_sizes(size_column):
 async def clean_file(file: UploadFile):
     try:
         df = await read_and_parse_file(file)
-        df = preprocess_dataframe(df)
-        df = filter_unwanted_data(df)
-        df = enrich_with_default_values(df)
+        expected_columns = {
+            'product_code': 'product_code',
+            'name': 'name',
+            'category': 'category',
+            'color': 'color',
+            'product_id': 'product_id',
+            'description': 'description',
+            'index_name': 'index_name',
+            'price': 'price',
+        }
+        if set(expected_columns.values()).issubset(df.columns):
+            print("The file already has the expected structure. Skipping preprocessing steps.")
+            # Enrich with default values for processed data
+            df = enrich_with_default_values(df)
+        else:
+            print("The file is raw and requires preprocessing.")
+            df = preprocess_dataframe(df)
+            df = filter_unwanted_data(df)
+            df = enrich_with_default_values(df)
         return df
     except Exception as e:
         raise ValueError(f"Failed to clean the file: {str(e)}")
-
-
-def generate_embeddings(products):
-    embedded_products = []
-    for product in products:
-        try:
-            description_text = product.get('description', '')
-            color_text = product.get('color', '')
-            price_text = f"Price: {product.get('price', 'Unknown')}"
-            full_description = f"{description_text} {color_text} {price_text}"
-            embedding = model.encode(full_description).tolist()
-            existing_product = product_collection.find_one({"_id": product["_id"]})
-            existing_embedding = existing_product.get("description_embedding")
-            if existing_embedding:
-                if existing_embedding == embedding:
-                    print(f"Product ID {product['_id']}: Embedding is unchanged. Skipping update.")
-                    continue  
-            else:
-                print(f"Product ID {product['_id']}: No embedding found. Updating now.")
-            product_collection.update_one(
-                {"_id": product["_id"]},
-                {"$set": {"description_embedding": embedding}}
-            )
-            response_product = {
-                "_id": str(product["_id"]),
-                "name": product.get("name", ""),
-                "product_id": product.get("product_id", 0),
-                "category": product.get("category", ""),
-                "price": product.get("price", ""),
-                "color": product.get("color", ""),
-                "sizes": product.get("sizes", []),
-                "description": [item[list(item.keys())[0]] for item in product.get("description", [])],
-                "images": product.get("images", []),
-                "total_stock": product.get("total_stock", 0),
-                "sold_count": product.get("sold_count", 0),
-                "review_count": product.get("review_count", 0),
-                "rating_count": product.get("rating_count", 0),
-                "avg_rating": product.get("avg_rating", 0.0),
-                "description_embedding": embedding,
-                "reviews": product.get("reviews", []),
-                "total_rating": product.get("total_rating", 0),
-            }
-            embedded_products.append(response_product)
-        except Exception as e:
-            print(f"Failed to process product ID {product.get('_id', 'Unknown')}: {e}")
-    return embedded_products
 
